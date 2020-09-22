@@ -31,7 +31,7 @@ FILE *fin;   // This is the file pointer from which the lexer reads its input.
 //  cool_yylex() is the function produced by flex. It returns the next
 //  token each time it is called.
 //
-extern int cool_yylex();
+extern "C" int cool_yylex();
 YYSTYPE cool_yylval;           // Not compiled with parser, so must define this.
 
 extern int optind;  // used for option processing (man 3 getopt for more info)
@@ -79,6 +79,7 @@ int main(int argc, char** argv) {
 	    //
 	    cout << "#name \"" << argv[optind] << "\"" << endl;
 	    while ((token = cool_yylex()) != 0) {
+            // cout << token << endl;
 		dump_cool_token(cout, curr_lineno, token, cool_yylval);
 	    }
 	    fclose(fin);

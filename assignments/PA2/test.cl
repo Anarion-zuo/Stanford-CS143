@@ -5,6 +5,7 @@
 class CellularAutomaton inherits IO {
     population_map : String;
    
+    -- init function
     init(map : String) : SELF_TYPE {
         {
             population_map <- map;
