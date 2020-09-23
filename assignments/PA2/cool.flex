@@ -11,6 +11,7 @@
 #include <cool-parse.h>
 #include <stringtab.h>
 #include <utilities.h>
+#include <vector>
 
 /* The compiler assumes these identifiers. */
 #define yylval cool_yylval
@@ -45,6 +46,9 @@ extern YYSTYPE cool_yylval;
  */
 
 static int commentCaller;
+static int stringCaller;
+
+static std::vector<char> stringArray;
 
 %}
 
@@ -86,6 +90,7 @@ LE              <=
 
 %x COMMENT
 %x STRING
+%x STRING_ESCAPE
 
 %%
 
@@ -144,6 +149,11 @@ LE              <=
   /*
     Invalid Characters
   */
+[\[\]\'>] {
+    cool_yylval.error_msg = yytext;
+    return (ERROR);
+}
+    /*
 \[ {
   cool_yylval.error_msg = "[";
   return (ERROR);
@@ -163,6 +173,7 @@ LE              <=
   cool_yylval.error_msg = ">";
   return (ERROR);
 }
+    */
 
  /*
   *  Nested comments
@@ -240,12 +251,12 @@ f[Aa][Ll][Ss][Ee] {
 }
 
 SELF_TYPE {
-  cool_yylval.symbol = new Entry(yytext, yyleng, 0);
+  cool_yylval.symbol = idtable.add_string("SELF_TYPE");
   return (TYPEID);
 }
 
-[A-Z][A-Za-z0-9_]*  {
-  cool_yylval.symbol = new Entry(yytext, yyleng, 0);
+[A-Z_][A-Za-z0-9_]*  {
+  cool_yylval.symbol = idtable.add_string(yytext, yyleng);
   return (TYPEID);
 }
   /*
@@ -253,11 +264,11 @@ SELF_TYPE {
     begins with a lower case letter
   */
 self {
-  cool_yylval.symbol = new Entry(yytext, yyleng, 0);
+  cool_yylval.symbol = idtable.add_string(yytext, yyleng);
   return (OBJECTID);
 }
-[a-z][A-Za-z0-9_]*  {
-  cool_yylval.symbol = new Entry(yytext, yyleng, 0);
+[a-z_][A-Za-z0-9_]*  {
+  cool_yylval.symbol = idtable.add_string(yytext, yyleng);
   return (OBJECTID);
 }
 
@@ -267,7 +278,7 @@ self {
   */
 [0-9][0-9]* {
   // cout << "INT_CONST" << endl;
-  cool_yylval.symbol = new Entry(yytext, yyleng, 0);
+  cool_yylval.symbol = inttable.add_string(yytext, yyleng);
   return (INT_CONST);
 }
 
@@ -278,65 +289,159 @@ self {
   *  \n \t \b \f, the result is c.
   *
   */
-\"[^\"]*\" {
-	// must get rid of surrounding "
-	char *begin = yytext + 1;
-	int length = yyleng - 2;
-	// count slashes
-	int slashCount = 0;
-	for (char *pc = begin; pc - begin != length; ++pc) {
-		if (*pc == '\\') {
-			++slashCount;
-		}
-	}
-	if (length - slashCount >= MAX_STR_CONST) {
-		cool_yylval.error_msg = "String constant too long";
-		return (ERROR);
-	}
-	char *content = new char [length - slashCount];
-	int index = 0;
 
-	for (char *pc = begin; pc - begin != length; ++pc) {
-		if (*pc == '\\') {
-			++pc;
-			switch(*pc) {
-				case '0':
-					cool_yylval.error_msg = "String contains null character";
-					delete []content;
-					return (ERROR);
-				case '\n':
-					++curr_lineno;
-					break;
-				case 'b':
-					content[index] = '\b';
-					break;
-				case 't':
-					content[index] = '\t';
-					break;
-				case 'n':
-					content[index] = '\n';
-					break;
-				case 'f':
-					content[index] = '\f';
-					break;
-				default:
-					cool_yylval.error_msg = "String contains invalid \\ character";
-					delete []content;
-					return (ERROR);
-			}
-		} else if (*pc == '\n') {
-			cool_yylval.error_msg = "Unterminated string constant";
-			delete []content;
-			return (ERROR);
-		} else {
-			content[index] = *pc;
-		}
-		++index;
-	}
-	cool_yylval.symbol = new Entry(content, length - slashCount, 0);
-	delete []content;
-	return (STR_CONST);
+
+\" {
+    stringCaller = INITIAL;
+    stringArray.clear();
+    BEGIN(STRING);
 }
+
+<STRING>[^\"\\]*\\ {
+    // does not include the last character escape
+    // cout << "escape !" << endl;
+    stringArray.insert(stringArray.end(), yytext, yytext + yyleng - 1);
+    BEGIN(STRING_ESCAPE);
+}
+
+<STRING>[^\"\\]*\" {
+    // end of line with closing "
+    // cout << "  string end !" << endl;
+    // push back string
+    // does not include the last character \"
+    stringArray.insert(stringArray.end(), yytext, yytext + yyleng - 1);
+    // setup string table
+    cool_yylval.symbol = stringtable.add_string(&stringArray[0], stringArray.size());
+    // exit
+    BEGIN(stringCaller);
+    return (STR_CONST);
+}
+
+<STRING>[^\"\\]*$ {
+    // push first
+    // contains the last character for yytext does not include \n
+    stringArray.insert(stringArray.end(), yytext, yytext + yyleng);
+    //setup error later
+    cool_yylval.error_msg = "Unterminated string constant";
+    BEGIN(stringCaller);
+    ++curr_lineno;
+    return (ERROR);
+}
+
+<STRING><<EOF>> {
+    cool_yylval.error_msg = "EOF in string constant";
+    BEGIN(stringCaller);
+    return (ERROR);
+}
+
+    /* btnf */
+
+<STRING_ESCAPE>n {
+    // cout << "escape \\n !" << endl;
+    stringArray.push_back('\n');
+    BEGIN(STRING);
+}
+
+<STRING_ESCAPE>b {
+    stringArray.push_back('\b');
+    BEGIN(STRING);
+}
+
+<STRING_ESCAPE>t {
+    stringArray.push_back('\t');
+    BEGIN(STRING);
+}
+
+<STRING_ESCAPE>f {
+    stringArray.push_back('\f');
+    BEGIN(STRING);
+}
+
+<STRING_ESCAPE>0 {
+    cool_yylval.error_msg = "String contains null character";
+    BEGIN(STRING);
+    return (ERROR);
+}
+
+<STRING_ESCAPE>\n {
+    stringArray.push_back('\n');
+    ++curr_lineno;
+    BEGIN(STRING);
+}
+
+<STRING_ESCAPE><<EOF>> {
+    cool_yylval.error_msg = "EOF in string constant";
+    BEGIN(STRING);
+    return (ERROR);
+}
+
+<STRING_ESCAPE>. {
+    stringArray.push_back(yytext[0]);
+    BEGIN(STRING);
+}
+
+
+    /*
+\"[^\"]*\" {
+    // must get rid of surrounding "
+    char *begin = yytext + 1;
+    int length = yyleng - 2;
+    // count slashes
+    int slashCount = 0;
+    for (char *pc = begin; pc - begin != length; ++pc) {
+        if (*pc == '\\') {
+            ++slashCount;
+        }
+    }
+    if (length - slashCount >= MAX_STR_CONST) {
+        cool_yylval.error_msg = "String constant too long";
+        return (ERROR);
+    }
+    char *content = new char [length - slashCount];
+    int index = 0;
+
+    for (char *pc = begin; pc - begin != length; ++pc) {
+        if (*pc == '\\') {
+            ++pc;
+            switch(*pc) {
+                case '0':
+                    cool_yylval.error_msg = "String contains null character";
+                    delete []content;
+                    return (ERROR);
+                case '\n':
+                    ++curr_lineno;
+                    break;
+                case 'b':
+                    content[index] = '\b';
+                    break;
+                case 't':
+                    content[index] = '\t';
+                    break;
+                case 'n':
+                    content[index] = '\n';
+                    break;
+                case 'f':
+                    content[index] = '\f';
+                    break;
+                default:
+                    cool_yylval.error_msg = "String contains invalid \\ character";
+                    delete []content;
+                    return (ERROR);
+            }
+        } else if (*pc == '\n') {
+            cool_yylval.error_msg = "Unterminated string constant";
+            delete []content;
+            return (ERROR);
+        } else {
+            content[index] = *pc;
+        }
+        ++index;
+    }
+    cool_yylval.symbol = new Entry(content, length - slashCount, 0);
+    delete []content;
+    return (STR_CONST);
+}
+    */
 
 
 . {
